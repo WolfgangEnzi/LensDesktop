@@ -36,14 +36,18 @@ For Macbooks users this should be:
 
 ```
 python -m pip install pyobjc mss pyinstaller pyobjc-framework-Quartz numpy scipy opencv pyqt 
-pyinstaller --noconfirm LensDesktop.spec
 ```
 
 Alternatively for Windows users:
 
 ```
 pip install numpy scipy opencv-python pyqt5 mss pyinstaller 
-pyinstaller --noconfirm LensDesktop_win11.spec
+```
+
+Using pyinstaller you can then create the executable in a new folder:
+
+```
+pyinstaller --noconfirm LensDesktop.spec
 ```
 
 The first start after creating the app usually takes a bit longer.
