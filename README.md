@@ -11,8 +11,8 @@ If it does not work for those, but you found a fix, please let me know so that w
 
 First download the code into a folder of your choice:
 ```
-git clone https://github.com/WolfgangEnzi/LensDesktopPrivate.git
-cd LensDesktopPrivate
+git clone https://github.com/WolfgangEnzi/LensDesktop.git
+cd LensDesktop
 ```
 
 I also recommend to create a new environment either with conda or venv:
