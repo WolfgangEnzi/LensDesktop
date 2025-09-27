@@ -35,7 +35,7 @@ You can then install the required packages.
 For Macbooks users this should be:
 
 ```
-python -m pip install pyobjc mss pyinstaller pyobjc-framework-Quartz numpy scipy opencv pyqt 
+python -m pip install pyobjc mss pyinstaller pyobjc-framework-Quartz numpy scipy opencv-python PyQt5
 ```
 
 Alternatively for Windows users:
