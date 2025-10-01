@@ -736,21 +736,22 @@ class LensDesktop(QtWidgets.QMainWindow):
                 y_source = int(interp((np.arange(self.base_w), np.arange(self.base_h)), self.map_y.T, method='linear', bounds_error=False, fill_value=None)(np.array([[x0, y0]]))[0])
 
             if len(self.ellipses_source_plane) > 0:
-                x_source = 2 * (self.ellipses_source_plane[0][0])
-                y_source = 2 * (self.ellipses_source_plane[0][1])
+                x_source = int(2 * (self.ellipses_source_plane[0][0]))
+                y_source = int(2 * (self.ellipses_source_plane[0][1]))
 
             for c in range(3):
                 cc = np.zeros((3,))
                 cc[c] = 255
-
+                color  = (int(cc[0]), int(cc[1]), int(cc[2]))
                 cv2.ellipse(img_bgr,
-                            center=(x_source, y_source),
-                            axes=(ps, ps),
-                            angle=0,
-                            startAngle=0 + c * 120,
-                            endAngle=120 + c * 120,
-                            color=cc,
-                            thickness=-1,)
+                            (x_source, y_source), # center
+                            (ps, ps), # axes
+                            0, #angle
+                            0 + c * 120, # startAngle
+                            120 + c * 120, # endAngle
+                            color, # color
+                            -1, # thickness
+                ) 
     
     def update_single_view(self):
 
@@ -852,15 +853,16 @@ class LensDesktop(QtWidgets.QMainWindow):
                             for c in range(3):
                                 cc = np.zeros((3,))
                                 cc[c] = 255
-
+                                color  = (int(cc[0]), int(cc[1]), int(cc[2]))
                                 cv2.ellipse(img_bgr,
-                                            center=(x0, y0),
-                                            axes=(ps // 2, ps // 2),
-                                            angle=0,
-                                            startAngle=0 + c * 120,
-                                            endAngle=120 + c * 120,
-                                            color=cc,
-                                            thickness=-1,)
+                                            (int(x0), int(y0)), # center
+                                            (ps // 2, ps // 2), # axes
+                                            0, #angle
+                                            0 + c * 120, # startAngle
+                                            120 + c * 120, # endAngle
+                                            color, # color
+                                            -1, # thickness
+                                )
 
             if len(self.ellipses_image_plane) > 0:
                 x0 = self.ellipses_image_plane[0][0]
@@ -869,15 +871,16 @@ class LensDesktop(QtWidgets.QMainWindow):
                 for c in range(3):
                     cc = np.zeros((3,))
                     cc[c] = 255
-
+                    color  = (int(cc[0]), int(cc[1]), int(cc[2]))
                     cv2.ellipse(img_bgr,
-                                center=(x0, y0),
-                                axes=(ps // 2, ps // 2),
-                                angle=0,
-                                startAngle=0 + c * 120,
-                                endAngle=120 + c * 120,
-                                color=cc,
-                                thickness=-1,)
+                                (int(x0), int(y0)), # center
+                                (ps // 2, ps // 2), # axes
+                                0, #angle
+                                0 + c * 120, # startAngle
+                                120 + c * 120, # endAngle
+                                color, # color
+                                -1, # thickness
+                    )
 
     def update_inverse_single_view(self):
         """
