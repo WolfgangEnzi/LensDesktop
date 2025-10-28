@@ -72,6 +72,9 @@ def _load_qt():
 
 QT_PKG, QtWidgets, QtCore, QtGui = _load_qt()
 
+QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+
 print(f"[info] Using {QT_PKG}")
 
 # from QtWidgets import QtWidgets.QApplication, QtWidgets.QLabel, QtWidgets.QMainWindow, QtWidgets.QSlider, QtWidgets.QSlider, QtWidgets.QFileDialog, QtWidgets.QShortcut
@@ -107,50 +110,51 @@ def capture_cam_rect(cap, width, height):
         frame = cv2.resize(frame, (2 * width, 2 * height))[:, :: -1]
         return frame
 
-def capture_screen_rect(sct,mon,x, y, width, height, exclude_window=None):
-    """
-    Function that captures the screen area defined by (x, y, width, height) 
-    while excluding the provided window.
+# def capture_screen_rect(sct,mon,x, y, width, height, exclude_window=None):
+#     """
+#     Function that captures the screen area defined by (x, y, width, height) 
+#     while excluding the provided window.
 
-    Parameters
-    ----------
-    x : int
-        X coordinate [pixels] of the rectangle to capture
-    y : int
-        Y coordinate [pixels] of the rectangle to capture
-    width : int
-        Pixel width of the LensDesktop window
-    height : int
-        Pixel height of the LensDesktop window
+#     Parameters
+#     ----------
+#     x : int
+#         X coordinate [pixels] of the rectangle to capture
+#     y : int
+#         Y coordinate [pixels] of the rectangle to capture
+#     width : int
+#         Pixel width of the LensDesktop window
+#     height : int
+#         Pixel height of the LensDesktop window
 
-    Returns
-    -------
-    frame : numpy.array
-        The recorded Desktop frame
-    """
+#     Returns
+#     -------
+#     frame : numpy.array
+#         The recorded Desktop frame
+#     """
 
-    w_full = mon["width"]
-    h_full = mon["height"]
+#     w_full = mon["width"]
+#     h_full = mon["height"]
     
-    raw = sct.grab(mon)
-    frame = np.array(raw, dtype=np.uint8)
+#     raw = sct.grab(mon)
+#     frame = np.array(raw, dtype=np.uint8)
 
-    top,bottom,left,right= 0,0,0,0
-    if x<0:
-        left = np.abs(x)
-    if x+width > w_full:
-        right = np.abs(x+width-w_full)
-    if y<0:
-        bottom = np.abs(y)
-    if y+height> h_full:
-        top = np.abs(y+height-h_full)
-    xi = x + left
-    yi = y + bottom
+#     top,bottom,left,right= 0,0,0,0
+#     if x<0:
+#         left = np.abs(x)
+#     if x+width > w_full:
+#         right = np.abs(x+width-w_full)
+#     if y<0:
+#         bottom = np.abs(y)
+#     if y+height> h_full:
+#         top = np.abs(y+height-h_full)
+#     xi = x + left
+#     yi = y + bottom
    
-    frame =  np.pad(frame, ((2*bottom, 2*top), (2*left, 2*right), (0,0)), mode='constant', constant_values=0)
-    cropped_frame = frame[2*yi:2*yi+2*height,2*xi:2*xi+2*width]
+#     frame =  np.pad(frame, ((2*bottom, 2*top), (2*left, 2*right), (0,0)), mode='constant', constant_values=0)
+#     cropped_frame = frame[2*yi:2*yi+2*height,2*xi:2*xi+2*width]
 
-    return cropped_frame
+#     return cropped_frame
+
 
 def reduce_points(points, threshold):
     points = [np.array(p) for p in points]
@@ -494,7 +498,45 @@ class LensDesktop(QtWidgets.QMainWindow):
         
         # try OS-level exclusion
         self.excluded = exclude_from_capture(self)
+                
+    def _content_capture_rect_px(self):
+        scr = self.windowHandle().screen()
+        try:
+            dpr = scr.devicePixelRatioF() / 2
+            print(dpr)
+        except AttributeError:
+            dpr = scr.devicePixelRatio() / 2
+            # print(dpr)
+        # dpr = 1
+        # Top-left of the *content area* in global coords (logical px)
+        tl = self.mapToGlobal(QtCore.QPoint(0, 0))
 
+        x_px = int(round(tl.x() / dpr))
+        y_px = int(round(tl.y() / dpr))
+        w_px = int(round(self.base_w * dpr))   # content size
+        h_px = int(round(self.base_h * dpr))
+        return {"left": x_px, "top": y_px, "width": w_px, "height": h_px}
+    
+    def capture_screen_rect(self):
+        rect = self._content_capture_rect_px()
+        raw  = self.sct.grab(rect)            
+        return np.array(raw, dtype=np.uint8)
+    
+    # def capture_screen_rect(self):
+    #     scr = self.windowHandle().screen()
+    #     geo = self.frameGeometry()  # logical coords for this window
+    #     pm  = scr.grabWindow(0, geo.x(), geo.y(), geo.width(), geo.height())
+    #     img = pm.toImage().convertToFormat(QtGui.QImage.Format_RGB888)
+    #     ptr = img.constBits()
+    #     ptr.setsize(img.height() * img.bytesPerLine())
+    #     arr = np.frombuffer(ptr, np.uint8).reshape(img.height(), img.bytesPerLine() // 3, 3)
+    #     return arr[:, :img.width(), :]  # RGB, (H,W,3)
+
+    # def capture_screen_rect(self):
+    #     mon, rect, sx, sy = self._capture_rect_for_mss()
+    #     raw = self.sct.grab(rect)  # already a cropped rect
+    #     return np.array(raw, dtype=np.uint8)  
+    
     def HideGUI(self):
 
         self.gui_hidden = not self.gui_hidden
@@ -755,15 +797,15 @@ class LensDesktop(QtWidgets.QMainWindow):
     
     def update_single_view(self):
 
-
         self.resize(self.base_w, self.base_h)
         self.label.setGeometry(0, 0, self.base_w, self.base_h)
         
-        geo = self.geometry()
+        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
-            arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
+            # arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
+            arr = self.capture_screen_rect()#self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
@@ -797,11 +839,12 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.resize(2 * self.base_w, self.base_h)
         self.label.setGeometry(0, 0, 2 * self.base_w, self.base_h)
 
-        geo = self.geometry()
+        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
-            arr = capture_screen_rect(self.sct,self.mon,geo.x(),geo.y(), self.base_w, self.base_h, exclude_window=self)
+            arr = self.capture_screen_rect()
+            # arr = capture_screen_rect(self.sct,self.mon,geo.x(),geo.y(), self.base_w, self.base_h, exclude_window=self)
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
@@ -892,11 +935,12 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.resize(self.base_w, self.base_h)
         self.label.setGeometry(0, 0, self.base_w, self.base_h)
 
-        geo = self.geometry()
+        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
-            arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
+            arr = self.capture_screen_rect()
+            # arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
         if img_bgr.shape[0] != self.base_h or img_bgr.shape[1] != self.base_w:
@@ -927,11 +971,12 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.resize(2 * self.base_w, self.base_h)
         self.label.setGeometry(0, 0, 2 * self.base_w, self.base_h)
 
-        geo = self.geometry()
+        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
-            arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
+            arr = self.capture_screen_rect()
+            # arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
         if img_bgr.shape[0] != self.base_h or img_bgr.shape[1] != self.base_w:
