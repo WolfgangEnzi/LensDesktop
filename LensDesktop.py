@@ -238,7 +238,7 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
     map_y = ((yv_new + Ly/2) * (height - 1)).astype(np.float32)
     kappa = 0.5 * b / (1e-30+r * r / q / q) 
     # in the future one could also add the easteregg heartshape to this
-
+    # print(map_x.mean(),map_y.mean())
     return map_x, map_y, deflxv, deflyv, xx.astype(np.float32), yy.astype(np.float32), kappa
 
 
@@ -355,6 +355,8 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         self.gui_hidden = False
         self.heart = False
+        self.frame = True
+        # self.mon_id = 0
 
         # capture setup
         self.sct = mss.mss()
@@ -489,38 +491,81 @@ class LensDesktop(QtWidgets.QMainWindow):
         save_shortcut5 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+V"), self)
         save_shortcut5.activated.connect(self.HideGUI)
 
+        # Create shortcut 5: Hide/Show GUI
+        save_shortcut6 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+M"), self)
+        save_shortcut6.activated.connect(self.switch_monitor)
+
         # Once the above is initialized create and draw the map.
         self.update_lensed_map()
         self.inv_map = partial(inverse_remap_image, x_idx=self.x_idx, y_idx=self.y_idx, mask_radius=self.mask_radius, base_w=self.base_w, base_h=self.base_h)
 
         self.ellipses_image_plane = []
         self.ellipses_source_plane = [] 
+
         
         # try OS-level exclusion
         self.excluded = exclude_from_capture(self)
-                
-    def _content_capture_rect_px(self):
-        scr = self.windowHandle().screen()
-        try:
-            dpr = scr.devicePixelRatioF() / 2
-            print(dpr)
-        except AttributeError:
-            dpr = scr.devicePixelRatio() / 2
-            # print(dpr)
-        # dpr = 1
-        # Top-left of the *content area* in global coords (logical px)
-        tl = self.mapToGlobal(QtCore.QPoint(0, 0))
 
-        x_px = int(round(tl.x() / dpr))
-        y_px = int(round(tl.y() / dpr))
-        w_px = int(round(self.base_w * dpr))   # content size
-        h_px = int(round(self.base_h * dpr))
-        return {"left": x_px, "top": y_px, "width": w_px, "height": h_px}
+    def switch_monitor(self):
+        self.mon_id +=1
+        Nmon = len( QtGui.QGuiApplication.screens())# self.sct.monitors)
+        if  self.mon_id == Nmon:
+            self.mon_id = 0
+        print(f"Using monitor {self.mon_id} of {Nmon}.")
+        self.mon = self.sct.monitors[self.mon_id ]
+
+
+    def _content_capture_rect_px(self):
+        # scr = self.windowHandle().screen()
+        # try:
+        #     dpr = scr.devicePixelRatioF() / 2
+        #     print(dpr)
+        # except AttributeError:
+        #     dpr = scr.devicePixelRatio() / 2
+        #     # print(dpr)
+        # # dpr = 1
+        # # Top-left of the *content area* in global coords (logical px)
+        # tl = self.mapToGlobal(QtCore.QPoint(0, 0))
+
+        # x_px = int(round(tl.x() / dpr))
+        # y_px = int(round(tl.y() / dpr))
+        # w_px = int(round(self.base_w * dpr))   # content size
+        # h_px = int(round(self.base_h * dpr))
+        # return {"left": x_px, "top": y_px, "width": w_px, "height": h_px}
+        # screens =  QtGui.QGuiApplication.screens()
+        scr =  self.windowHandle().screen()
+        # scr= screens[self.mon_id]
+        # try:
+        #     dpr = scr.devicePixelRatioF() / 2
+        # except AttributeError:
+        # dpr = scr.devicePixelRatio() /2
+ 
+        geo = scr.geometry()
+
+        # x0 = geo.x()
+        # y0 = geo.y()
+        tl = self.mapToGlobal(QtCore.QPoint(0,0))#self.mon["left"], self.mon["top"]))
+
+        # define region relative to that monitor
+        
+        # print(tl.x(),tl.y() ,x0,y0 )
+        region = {
+            "left": int(round(tl.x() )),
+            "top": int(round(tl.y() )),
+            "width":  int(round(self.base_w)),
+            "height": int(round(self.base_h))
+        }
+        # print(region)
+        return region
+
     
     def capture_screen_rect(self):
         rect = self._content_capture_rect_px()
-        raw  = self.sct.grab(rect)            
-        return np.array(raw, dtype=np.uint8)
+        raw  = self.sct.grab(rect)     
+        out = np.array(raw, dtype=np.uint8)
+        # print(out.shape)       
+        out = cv2.resize(out, (self.base_w*2, self.base_h*2))
+        return  out
     
     # def capture_screen_rect(self):
     #     scr = self.windowHandle().screen()
@@ -561,6 +606,20 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.inverse_checkbox.setVisible(not self.inverse_checkbox.isVisible())
         self.dual_checkbox.setVisible(not self.dual_checkbox.isVisible())
         self.critical_checkbox.setVisible(not self.critical_checkbox.isVisible())
+
+        flags = self.windowFlags()
+
+        if self.frame==True:
+            # Remove a flag
+            flags |= QtCore.Qt.FramelessWindowHint
+           
+        else:
+            # Add a flag
+            flags &= ~QtCore.Qt.FramelessWindowHint
+        self.frame = not self.frame
+
+        self.setWindowFlags(flags)
+        self.show()
 
     def set_Geometry_sliders_and_labels(self):
 
@@ -851,12 +910,15 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.show_ps(img_bgr)
 
         img_unlensed = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        if img_unlensed.shape[0] != self.base_h or img_unlensed.shape[1] != self.base_w:
-            img_unlensed = cv2.resize(img_unlensed, (self.base_w, self.base_h))
 
+        # print(img_unlensed.shape[0],img_unlensed.shape[1],self.base_h,self.base_w)
+        if img_unlensed.shape[0] != self.base_h or img_unlensed.shape[1] != self.base_w:
+            
+            img_unlensed = cv2.resize(img_unlensed, (self.base_w, self.base_h))
 
         Lx = 2*self.base_w/max(self.base_w,self.base_h)
         Ly = 2*self.base_h/max(self.base_w,self.base_h)
+        # print(Lx,Ly)
         SIE_map_bgr = cv2.remap(img_bgr, self.map_x*2/Lx, self.map_y*2/Ly,
                                 interpolation=cv2.INTER_CUBIC,
                                 borderMode=cv2.BORDER_CONSTANT)
