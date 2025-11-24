@@ -110,52 +110,6 @@ def capture_cam_rect(cap, width, height):
         frame = cv2.resize(frame, (2 * width, 2 * height))[:, :: -1]
         return frame
 
-# def capture_screen_rect(sct,mon,x, y, width, height, exclude_window=None):
-#     """
-#     Function that captures the screen area defined by (x, y, width, height) 
-#     while excluding the provided window.
-
-#     Parameters
-#     ----------
-#     x : int
-#         X coordinate [pixels] of the rectangle to capture
-#     y : int
-#         Y coordinate [pixels] of the rectangle to capture
-#     width : int
-#         Pixel width of the LensDesktop window
-#     height : int
-#         Pixel height of the LensDesktop window
-
-#     Returns
-#     -------
-#     frame : numpy.array
-#         The recorded Desktop frame
-#     """
-
-#     w_full = mon["width"]
-#     h_full = mon["height"]
-    
-#     raw = sct.grab(mon)
-#     frame = np.array(raw, dtype=np.uint8)
-
-#     top,bottom,left,right= 0,0,0,0
-#     if x<0:
-#         left = np.abs(x)
-#     if x+width > w_full:
-#         right = np.abs(x+width-w_full)
-#     if y<0:
-#         bottom = np.abs(y)
-#     if y+height> h_full:
-#         top = np.abs(y+height-h_full)
-#     xi = x + left
-#     yi = y + bottom
-   
-#     frame =  np.pad(frame, ((2*bottom, 2*top), (2*left, 2*right), (0,0)), mode='constant', constant_values=0)
-#     cropped_frame = frame[2*yi:2*yi+2*height,2*xi:2*xi+2*width]
-
-#     return cropped_frame
-
-
 def reduce_points(points, threshold):
     points = [np.array(p) for p in points]
     unique = []
@@ -238,7 +192,6 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
     map_y = ((yv_new + Ly/2) * (height - 1)).astype(np.float32)
     kappa = 0.5 * b / (1e-30+r * r / q / q) 
     # in the future one could also add the easteregg heartshape to this
-    # print(map_x.mean(),map_y.mean())
     return map_x, map_y, deflxv, deflyv, xx.astype(np.float32), yy.astype(np.float32), kappa
 
 
@@ -356,7 +309,6 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.gui_hidden = False
         self.heart = False
         self.frame = True
-        # self.mon_id = 0
 
         # capture setup
         self.sct = mss.mss()
@@ -418,7 +370,6 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.old_pos = None
 
         # Sliders for parameters.
-
         # Slider for the Einstein radius
         self.sliderb = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
 
@@ -491,96 +442,37 @@ class LensDesktop(QtWidgets.QMainWindow):
         save_shortcut5 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+V"), self)
         save_shortcut5.activated.connect(self.HideGUI)
 
-        # Create shortcut 5: Hide/Show GUI
-        save_shortcut6 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+M"), self)
-        save_shortcut6.activated.connect(self.switch_monitor)
-
         # Once the above is initialized create and draw the map.
         self.update_lensed_map()
         self.inv_map = partial(inverse_remap_image, x_idx=self.x_idx, y_idx=self.y_idx, mask_radius=self.mask_radius, base_w=self.base_w, base_h=self.base_h)
 
         self.ellipses_image_plane = []
         self.ellipses_source_plane = [] 
-
         
         # try OS-level exclusion
         self.excluded = exclude_from_capture(self)
 
-    def switch_monitor(self):
-        self.mon_id +=1
-        Nmon = len( QtGui.QGuiApplication.screens())# self.sct.monitors)
-        if  self.mon_id == Nmon:
-            self.mon_id = 0
-        print(f"Using monitor {self.mon_id} of {Nmon}.")
-        self.mon = self.sct.monitors[self.mon_id ]
-
-
     def _content_capture_rect_px(self):
-        # scr = self.windowHandle().screen()
-        # try:
-        #     dpr = scr.devicePixelRatioF() / 2
-        #     print(dpr)
-        # except AttributeError:
-        #     dpr = scr.devicePixelRatio() / 2
-        #     # print(dpr)
-        # # dpr = 1
-        # # Top-left of the *content area* in global coords (logical px)
-        # tl = self.mapToGlobal(QtCore.QPoint(0, 0))
-
-        # x_px = int(round(tl.x() / dpr))
-        # y_px = int(round(tl.y() / dpr))
-        # w_px = int(round(self.base_w * dpr))   # content size
-        # h_px = int(round(self.base_h * dpr))
-        # return {"left": x_px, "top": y_px, "width": w_px, "height": h_px}
-        # screens =  QtGui.QGuiApplication.screens()
-        scr =  self.windowHandle().screen()
-        # scr= screens[self.mon_id]
-        # try:
-        #     dpr = scr.devicePixelRatioF() / 2
-        # except AttributeError:
-        # dpr = scr.devicePixelRatio() /2
- 
-        geo = scr.geometry()
-
-        # x0 = geo.x()
-        # y0 = geo.y()
-        tl = self.mapToGlobal(QtCore.QPoint(0,0))#self.mon["left"], self.mon["top"]))
-
-        # define region relative to that monitor
         
-        # print(tl.x(),tl.y() ,x0,y0 )
+        tl = self.mapToGlobal(QtCore.QPoint(0,0))
         region = {
             "left": int(round(tl.x() )),
             "top": int(round(tl.y() )),
             "width":  int(round(self.base_w)),
             "height": int(round(self.base_h))
         }
-        # print(region)
         return region
 
     
     def capture_screen_rect(self):
         rect = self._content_capture_rect_px()
         raw  = self.sct.grab(rect)     
-        out = np.array(raw, dtype=np.uint8)
-        # print(out.shape)       
-        out = cv2.resize(out, (self.base_w*2, self.base_h*2))
+        out = np.array(raw, dtype=np.uint8)       
+        out = cv2.resize(out, (self.base_w*2, self.base_h*2)) 
+        # The above resize happens because some screens return a higher resolution grab. 
+        # Twice the resolution should be enough for good interpolation, so I will scale it to this for consistent output) 
+        # If the screen returns a lower resolution this is still fine though.
         return  out
-    
-    # def capture_screen_rect(self):
-    #     scr = self.windowHandle().screen()
-    #     geo = self.frameGeometry()  # logical coords for this window
-    #     pm  = scr.grabWindow(0, geo.x(), geo.y(), geo.width(), geo.height())
-    #     img = pm.toImage().convertToFormat(QtGui.QImage.Format_RGB888)
-    #     ptr = img.constBits()
-    #     ptr.setsize(img.height() * img.bytesPerLine())
-    #     arr = np.frombuffer(ptr, np.uint8).reshape(img.height(), img.bytesPerLine() // 3, 3)
-    #     return arr[:, :img.width(), :]  # RGB, (H,W,3)
-
-    # def capture_screen_rect(self):
-    #     mon, rect, sx, sy = self._capture_rect_for_mss()
-    #     raw = self.sct.grab(rect)  # already a cropped rect
-    #     return np.array(raw, dtype=np.uint8)  
     
     def HideGUI(self):
 
@@ -610,11 +502,9 @@ class LensDesktop(QtWidgets.QMainWindow):
         flags = self.windowFlags()
 
         if self.frame==True:
-            # Remove a flag
             flags |= QtCore.Qt.FramelessWindowHint
-           
+            flags |= QtCore.Qt.Window
         else:
-            # Add a flag
             flags &= ~QtCore.Qt.FramelessWindowHint
         self.frame = not self.frame
 
@@ -654,7 +544,6 @@ class LensDesktop(QtWidgets.QMainWindow):
             heart=self.heart
         )
 
-        
         Lx = 2 * self.base_w/max(self.base_w,self.base_h)
         Ly = 2 * self.base_h/max(self.base_w,self.base_h)
 
@@ -682,7 +571,6 @@ class LensDesktop(QtWidgets.QMainWindow):
         crit_mask = (np.sign(det) < 0)
         self.contours, _ = cv2.findContours(crit_mask.astype(np.uint8) , cv2.RETR_LIST,cv2.CHAIN_APPROX_NONE )
 
-        
         # Save critical curves that go along
         caustic_contours = []
         for cnt in self.contours:
@@ -710,7 +598,6 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.update_view()
 
     # Functions that are called when the sliders are updated
-
     def update_mask(self, valuem):
         self.mask_radius = (valuem - 40) / (99 - 40) * np.sqrt(self.base_h**2 + self.base_w**2) / 2
         self.update_lensed_map()
@@ -859,12 +746,10 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.resize(self.base_w, self.base_h)
         self.label.setGeometry(0, 0, self.base_w, self.base_h)
         
-        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
-            # arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
-            arr = self.capture_screen_rect()#self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
+            arr = self.capture_screen_rect()
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
@@ -872,7 +757,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         
         Lx = 2.0*self.base_w/max(self.base_w,self.base_h)
         Ly = 2.0*self.base_h/max(self.base_w,self.base_h)
-        # Forwarz (lensing) remapping.
+
+        # Forward (lensing) remapping.
         SIE_map_bgr = cv2.remap(img_bgr, self.map_x*2.0/Lx, self.map_y*2.0/Ly,
                                 interpolation=cv2.INTER_CUBIC,
                                 borderMode=cv2.BORDER_CONSTANT)
@@ -893,32 +779,27 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def update_dual_view(self):
 
-        # self.setFixedSize(2 * self.base_w, self.base_h)
-
         self.resize(2 * self.base_w, self.base_h)
         self.label.setGeometry(0, 0, 2 * self.base_w, self.base_h)
 
-        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
             arr = self.capture_screen_rect()
-            # arr = capture_screen_rect(self.sct,self.mon,geo.x(),geo.y(), self.base_w, self.base_h, exclude_window=self)
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
         self.show_ps(img_bgr)
 
         img_unlensed = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-        # print(img_unlensed.shape[0],img_unlensed.shape[1],self.base_h,self.base_w)
+        
         if img_unlensed.shape[0] != self.base_h or img_unlensed.shape[1] != self.base_w:
             
             img_unlensed = cv2.resize(img_unlensed, (self.base_w, self.base_h))
 
         Lx = 2*self.base_w/max(self.base_w,self.base_h)
         Ly = 2*self.base_h/max(self.base_w,self.base_h)
-        # print(Lx,Ly)
+        
         SIE_map_bgr = cv2.remap(img_bgr, self.map_x*2/Lx, self.map_y*2/Ly,
                                 interpolation=cv2.INTER_CUBIC,
                                 borderMode=cv2.BORDER_CONSTANT)
@@ -992,17 +873,14 @@ class LensDesktop(QtWidgets.QMainWindow):
         When inverse lensing is enabled, we capture the image, perform the forward mapping as before,
         and then use our inverse_remap_image() routine to “undo” the lensing.
         """
-        # self.setFixedSize(self.base_w, self.base_h)
 
         self.resize(self.base_w, self.base_h)
         self.label.setGeometry(0, 0, self.base_w, self.base_h)
 
-        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
             arr = self.capture_screen_rect()
-            # arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
         if img_bgr.shape[0] != self.base_h or img_bgr.shape[1] != self.base_w:
@@ -1028,17 +906,13 @@ class LensDesktop(QtWidgets.QMainWindow):
         and then use our inverse_remap_image() routine to “undo” the lensing.
         """
 
-        # self.setFixedSize(2 * self.base_w, self.base_h)
-
         self.resize(2 * self.base_w, self.base_h)
         self.label.setGeometry(0, 0, 2 * self.base_w, self.base_h)
 
-        # geo = self.geometry()
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
             arr = self.capture_screen_rect()
-            # arr = capture_screen_rect(self.sct,self.mon,geo.x(), geo.y(), self.base_w, self.base_h, exclude_window=self)
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
         if img_bgr.shape[0] != self.base_h or img_bgr.shape[1] != self.base_w:
