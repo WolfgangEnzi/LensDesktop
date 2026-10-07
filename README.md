@@ -1,7 +1,7 @@
 # Lens Desktop
 
-![A tool to lens what is shown on your Desktop!](example.png)
-
+![A tool to lens what is shown on your Desktop! Example 1: Foto of beach.](example1.png)
+![A tool to lens what is shown on your Desktop! Example 2: Colorwheel.](example2.png)
 # Important Disclaimer
 
 This tool uses screen / camera recording to map images in (almost) real time to a lensed/delensed image.
@@ -76,6 +76,8 @@ You can use the following shortcuts:
 - Ctrl+R : To Save a sequence of images in which the Einstein radius increases up
          to its current value (this allows to create nice gifs, e.g. using ffmpeg to postprocess the images).
 - Ctrl+V : To turn some of the GUI elements on/off.
+- Ctrl+D : Turn RGB ball into substructure.
+- Ctrl+T : Turn RGB ball into periodically flashing point light source.
 
 Use Rightclick to add / remove an RBG circle. This can be used to show Parity of images, magnification and sheer, and conjugate points.
 Notice that it matters on which side of the dual view you click when creating this RBG circle, since this will decide the where the circle is anchored to.

@@ -17,6 +17,9 @@ Ctrl+F : To turn the device camera on/off for recording.
 Ctrl+R : To Save a sequence of images in which the Einstein radius increases up
          to its current value (this allows to create nice gifs, e.g. using ffmpeg to postprocess the images).
 Ctrl+V : To turn some of the GUI elements on/off.
+Ctrl+D : Turn RGB ball into substructure.
+Ctrl+T : Turn RGB ball into periodically flashing point light source.
+Ctrl+E : Enter your own deflection angle equation. [TBD]
 
 Use Rightclick to add / remove an RBG circle. This can be used to show Parity of images, magnification and sheer, and conjugate points.
 Notice that it matters on which side of the dual view you click when creating this RBG circle, since this will decide the where the circle is anchored to.
@@ -158,7 +161,7 @@ def SIE_defl(xx, yy, t, s, heart, q, b):
     return deflxv, deflyv, r
 
 
-def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
+def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False,pars_sub=None):
     """
     Function that computes the source positions and deflection angles. 
     When precomputed for fixed parameters, it is possible to map an image from the source plane 
@@ -186,11 +189,19 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
     y = np.linspace(-1, 1, height) * Ly/2
     xx, yy = np.meshgrid(x, y)
     deflxv, deflyv, r = SIE_defl(xx  , yy , t, s, heart, q , b)
+    if pars_sub:
+        x_sub, y_sub = pars_sub
+        deflxv_sub, deflyv_sub, r_sub = SIE_defl(xx - ( x_sub * 2 / width -1) , yy -( y_sub * 2 / height -1) , 0, 1e-10, False, 0.999 , b/50.0)
+        deflxv += deflxv_sub
+        deflyv += deflyv_sub
     xv_new = xx - deflxv
     yv_new = yy - deflyv
     map_x = ((xv_new + Lx/2) * (width - 1)).astype(np.float32)
     map_y = ((yv_new + Ly/2) * (height - 1)).astype(np.float32)
     kappa = 0.5 * b / (1e-30+r * r / q / q) 
+    if pars_sub:
+        kappa_sub = 0.05 * b/50 / (1e-30+r_sub * r_sub ) 
+        kappa += kappa_sub
     # in the future one could also add the easteregg heartshape to this
     return map_x, map_y, deflxv, deflyv, xx.astype(np.float32), yy.astype(np.float32), kappa
 
@@ -308,6 +319,7 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         self.gui_hidden = False
         self.heart = False
+        self.substructure = False
         self.frame = True
 
         # capture setup
@@ -340,24 +352,24 @@ class LensDesktop(QtWidgets.QMainWindow):
         # Checkboxes.
         # Checkbox to toggle critical curves.
         self.critical_checkbox = QtWidgets.QCheckBox("Critical Curve", self)
-        self.critical_checkbox.setGeometry(10, 10, 150, 20)
+        self.critical_checkbox.setGeometry(10, 10, 150, 15)
         self.critical_checkbox.setStyleSheet(f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;")
 
         # Checkbox to toggle dual view.
         self.dual_checkbox = QtWidgets.QCheckBox("Dual view", self)
-        self.dual_checkbox.setGeometry(10, 40, 150, 20)
+        self.dual_checkbox.setGeometry(10, 30, 150, 15)
         self.dual_checkbox.stateChanged.connect(self.dual_view_toggled)
         self.dual_checkbox.setStyleSheet(f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;")
 
         # New checkbox to toggle inverse lensing.
         self.inverse_checkbox = QtWidgets.QCheckBox("De-lensing", self)
-        self.inverse_checkbox.setGeometry(10, 70, 150, 20)
+        self.inverse_checkbox.setGeometry(10, 50, 150, 15)
         self.inverse_checkbox.stateChanged.connect(self.update_view)
         self.inverse_checkbox.setStyleSheet(f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;")
 
         # New checkbox to toggle inverse lensing.
         self.lenslight_checkbox = QtWidgets.QCheckBox("Lens Light", self)
-        self.lenslight_checkbox.setGeometry(10, 100, 150, 20)
+        self.lenslight_checkbox.setGeometry(10, 70, 150, 15)
         self.lenslight_checkbox.stateChanged.connect(self.update_view)
         self.lenslight_checkbox.setStyleSheet(f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;")
 
@@ -382,7 +394,7 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         # Slider for the position angle of the lens mass distribution
         self.sliderq = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-        self.sliderq.setRange(40, 99)
+        self.sliderq.setRange(2, 99)
         self.sliderq.setValue(65)
         self.sliderq.valueChanged.connect(self.update_q_value)
         self.q_value = 0.65
@@ -442,6 +454,10 @@ class LensDesktop(QtWidgets.QMainWindow):
         save_shortcut5 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+V"), self)
         save_shortcut5.activated.connect(self.HideGUI)
 
+        # Create shortcut 5: Hide/Show GUI
+        save_shortcut5 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+D"), self)
+        save_shortcut5.activated.connect(self.AddSubstructure)
+
         # Once the above is initialized create and draw the map.
         self.update_lensed_map()
         self.inv_map = partial(inverse_remap_image, x_idx=self.x_idx, y_idx=self.y_idx, mask_radius=self.mask_radius, base_w=self.base_w, base_h=self.base_h)
@@ -474,6 +490,11 @@ class LensDesktop(QtWidgets.QMainWindow):
         # If the screen returns a lower resolution this is still fine though.
         return  out
     
+    
+    def AddSubstructure(self):
+        self.substructure = not self.substructure 
+        self.update_lensed_map()
+        
     def HideGUI(self):
 
         self.gui_hidden = not self.gui_hidden
@@ -513,14 +534,14 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def set_Geometry_sliders_and_labels(self):
 
-        self.sliderb.setGeometry(130, self.base_h - 40, self.base_w * 4 // 6 , 20)
-        self.labelb.setGeometry(10, self.base_h - 40, 110, 15)
-        self.sliderq.setGeometry(130, self.base_h - 60, self.base_w * 4 // 6, 20)
-        self.labelq.setGeometry(10, self.base_h - 60, 110, 15)
-        self.sliders.setGeometry(130, self.base_h - 80, self.base_w * 4 // 6, 20)
-        self.labels.setGeometry(10, self.base_h - 80, 110, 15)
-        self.slidert.setGeometry(130, self.base_h - 100, self.base_w * 4 // 6, 20)
-        self.labelt.setGeometry(10, self.base_h - 100, 110, 15)
+        self.sliderb.setGeometry(130, self.base_h - 100, self.base_w * 4 // 6 , 20)
+        self.labelb.setGeometry(10, self.base_h - 100, 110, 15)
+        self.sliderq.setGeometry(130, self.base_h - 80, self.base_w * 4 // 6, 20)
+        self.labelq.setGeometry(10, self.base_h - 80, 110, 15)
+        self.sliders.setGeometry(130, self.base_h - 40, self.base_w * 4 // 6, 20)
+        self.labels.setGeometry(10, self.base_h - 40, 110, 15)
+        self.slidert.setGeometry(130, self.base_h - 60, self.base_w * 4 // 6, 20)
+        self.labelt.setGeometry(10, self.base_h - 60, 110, 15)
         self.slider_mask.setGeometry(130, self.base_h - 120, self.base_w * 4 // 6, 20)
         self.label_mask.setGeometry(10, self.base_h - 120, 110, 15)
 
@@ -535,13 +556,20 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def update_lensed_map(self):
 
+        pars_sub = None
+        if self.substructure:
+            if len(self.ellipses_image_plane) > 0:
+                pars_sub = (self.ellipses_image_plane[0][0], self.ellipses_image_plane[0][1])
+        else:
+            pars_sub = None
         self.map_x, self.map_y, self.deflxv, self.deflyv, _, _, self.kappa = create_SIE_map(
             self.base_w, self.base_h,
             b=self.b_value / np.sqrt(self.q_value),
             q=self.q_value,
             s=self.s_value * self.b_value,
             t=self.t_value,
-            heart=self.heart
+            heart=self.heart,
+            pars_sub=pars_sub
         )
 
         Lx = 2 * self.base_w/max(self.base_w,self.base_h)
@@ -753,7 +781,8 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
-        self.show_ps(img_bgr)
+        if not self.substructure:
+            self.show_ps(img_bgr)
         
         Lx = 2.0*self.base_w/max(self.base_w,self.base_h)
         Ly = 2.0*self.base_h/max(self.base_w,self.base_h)
@@ -789,7 +818,8 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
-        self.show_ps(img_bgr)
+        if not self.substructure:
+            self.show_ps(img_bgr)
 
         img_unlensed = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         
@@ -972,7 +1002,7 @@ class LensDesktop(QtWidgets.QMainWindow):
                     else:
                         self.ellipses_image_plane += [(ex, ey,)]
                 
-                self.update_lensed_map()
+            self.update_lensed_map()
 
     def resizeEvent(self, event):
         # This is called whenever the window is resized
