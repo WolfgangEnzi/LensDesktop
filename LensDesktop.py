@@ -17,8 +17,8 @@ Ctrl+F : To turn the device camera on/off for recording.
 Ctrl+R : To Save a sequence of images in which the Einstein radius increases up
          to its current value (this allows to create nice gifs, e.g. using ffmpeg to postprocess the images).
 Ctrl+V : To turn some of the GUI elements on/off.
-Ctrl+D : Turn RGB ball into substructure.
-Ctrl+T : Turn RGB ball into periodically flashing point light source.
+Ctrl+D : Turn RGB ball into DM substructure.
+Ctrl+T : Turn RGB ball into time delay point lightsource with periodic signal.
 Ctrl+E : Enter your own deflection angle equation. [TBD]
 
 Use Rightclick to add / remove an RBG circle. This can be used to show Parity of images, magnification and sheer, and conjugate points.
@@ -150,15 +150,30 @@ def SIE_defl(xx, yy, t, s, heart, q, b):
     ct, st = np.cos(t), np.sin(t)
     xv, yv = ct * xx - st * yy, st * xx + ct * yy
     r = np.sqrt(q * q * (xv * xv + s * s) + yv * yv)
+
+    sqrt_term = np.sqrt(np.maximum(1 - q * q, eps))
+    A = b * q / sqrt_term
+    deflx = A * np.arctan(sqrt_term * xv / (r + s))
+    defly_arg = sqrt_term * yv / (r + q * q * s)
+    defly_arg = np.clip(defly_arg, -1 + 1e-12, 1 - 1e-12)
+    defly = A * np.arctanh(defly_arg)
+
+    potential = None
+    if not heart:
+        if s > 0:
+            log_term = np.sqrt((r + s) ** 2 + (1 - q * q) * xv * xv)
+            potential = xv * deflx + yv * defly - b * q * s * np.log(np.maximum(log_term / ((1 + q) * s), 1e-30))
+        else:
+            potential = xv * deflx + yv * defly
+
     fac = 1.0
     if heart:
         fac = heart_shape(xv, yv)
-    A = b * q / np.sqrt(1 - q * q)
-    deflx = A * np.arctan(np.sqrt(1 - q * q) * xv / (r + s)) * fac
-    defly = A * np.arctanh(np.sqrt(1 - q * q) * yv / (r + q * q * s)) * fac
+    deflx *= fac
+    defly *= fac
     deflxv = ct * deflx + st * defly
     deflyv = -st * deflx + ct * defly
-    return deflxv, deflyv, r
+    return deflxv, deflyv, r, potential
 
 
 def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False,pars_sub=None):
@@ -188,12 +203,14 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False,p
     x = np.linspace(-1, 1, width) * Lx/2
     y = np.linspace(-1, 1, height) * Ly/2
     xx, yy = np.meshgrid(x, y)
-    deflxv, deflyv, r = SIE_defl(xx  , yy , t, s, heart, q , b)
+    deflxv, deflyv, r, potential = SIE_defl(xx  , yy , t, s, heart, q , b)
     if pars_sub:
         x_sub, y_sub = pars_sub
-        deflxv_sub, deflyv_sub, r_sub = SIE_defl(xx - ( x_sub * 2 / width -1) , yy -( y_sub * 2 / height -1) , 0, 1e-10, False, 0.999 , b/50.0)
+        deflxv_sub, deflyv_sub, r_sub, potential_sub = SIE_defl(xx - ( x_sub * 2 / width -1) , yy -( y_sub * 2 / height -1) , 0, 1e-10, False, 0.999 , b/50.0)
         deflxv += deflxv_sub
         deflyv += deflyv_sub
+        if potential is not None and potential_sub is not None:
+            potential += potential_sub
     xv_new = xx - deflxv
     yv_new = yy - deflyv
     map_x = ((xv_new + Lx/2) * (width - 1)).astype(np.float32)
@@ -203,7 +220,9 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False,p
         kappa_sub = 0.05 * b/50 / (1e-30+r_sub * r_sub ) 
         kappa += kappa_sub
     # in the future one could also add the easteregg heartshape to this
-    return map_x, map_y, deflxv, deflyv, xx.astype(np.float32), yy.astype(np.float32), kappa
+    if potential is not None:
+        potential = potential.astype(np.float32)
+    return map_x, map_y, deflxv, deflyv, xx.astype(np.float32), yy.astype(np.float32), kappa, potential
 
 
 def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius,base_w,base_h):
@@ -321,6 +340,22 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.heart = False
         self.substructure = False
         self.frame = True
+        self.time_delay_mode = False
+        self.time_delay_start = time.time()
+        self.time_delay_peak = 255.0
+        self.time_delay_floor = 0.15
+        self.time_delay_source_tol = 1.5
+        self.time_delay_mu_cap = 1e4
+        self.time_delay_log_strength = 1.0
+        self.time_delay_visual_min_max_delay = 0.75
+        self.time_delay_inset_alpha = 0.78
+        self.time_delay_inset_bg = (28, 28, 34)
+        self.time_delay_inset_border = (200, 200, 200)
+        self.time_delay_inset_axis = (120, 120, 128)
+        self.time_delay_inset_text = (228, 228, 232)
+        self.time_delay_inset_main_curve = (240, 240, 240)
+        self.time_delay_solution_cache = None
+        self.time_delay_trace_samples = 220
 
         # capture setup
         self.sct = mss.mss()
@@ -454,9 +489,13 @@ class LensDesktop(QtWidgets.QMainWindow):
         save_shortcut5 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+V"), self)
         save_shortcut5.activated.connect(self.HideGUI)
 
-        # Create shortcut 5: Hide/Show GUI
-        save_shortcut5 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+D"), self)
-        save_shortcut5.activated.connect(self.AddSubstructure)
+        # Create shortcut 6: Add/remove substructure
+        save_shortcut6 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+D"), self)
+        save_shortcut6.activated.connect(self.AddSubstructure)
+
+        # Create shortcut 7: Toggle time-delay image markers
+        save_shortcut7 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+T"), self)
+        save_shortcut7.activated.connect(self.toggle_time_delay_mode)
 
         # Once the above is initialized create and draw the map.
         self.update_lensed_map()
@@ -494,6 +533,308 @@ class LensDesktop(QtWidgets.QMainWindow):
     def AddSubstructure(self):
         self.substructure = not self.substructure 
         self.update_lensed_map()
+
+    def toggle_time_delay_mode(self):
+        self.time_delay_mode = not self.time_delay_mode
+        self.time_delay_start = time.time()
+        self.time_delay_solution_cache = None
+
+    def _get_source_center_px(self):
+
+        if len(self.ellipses_source_plane) > 0:
+            return float(self.ellipses_source_plane[0][0]), float(self.ellipses_source_plane[0][1])
+
+        if len(self.ellipses_image_plane) > 0:
+            x0 = int(np.clip(round(self.ellipses_image_plane[0][0]), 0, self.base_w - 1))
+            y0 = int(np.clip(round(self.ellipses_image_plane[0][1]), 0, self.base_h - 1))
+            Lx = 2 * self.base_w / max(self.base_w, self.base_h)
+            Ly = 2 * self.base_h / max(self.base_w, self.base_h)
+            return float(self.map_x[y0, x0] / Lx), float(self.map_y[y0, x0] / Ly)
+
+        return None
+
+    def _time_delay_flare(self, phase, loop_duration):
+        peak_time = 0.2 * loop_duration
+        width = max(0.08 * loop_duration, 0.15)
+        dist = abs(phase - peak_time)
+        dist = min(dist, loop_duration - dist)
+        pulse = np.exp(-0.5 * (dist / width) ** 2)
+        return self.time_delay_floor + (1 - self.time_delay_floor) * pulse
+
+    def _get_time_delay_solution_data(self):
+
+        if not self.time_delay_mode or self.heart or self.potential_map is None:
+            return None
+
+        if self.time_delay_solution_cache is not None:
+            return self.time_delay_solution_cache
+
+        src_center = self._get_source_center_px()
+        if src_center is None:
+            return None
+
+        sx, sy = src_center
+        y_idx = self.y_idx.reshape((self.base_h, self.base_w))
+        x_idx = self.x_idx.reshape((self.base_h, self.base_w))
+        mask = (x_idx - sx) ** 2 + (y_idx - sy) ** 2 < self.time_delay_source_tol ** 2
+        ids = np.argwhere(mask)
+        if len(ids) == 0:
+            return None
+
+        ids = reduce_points(ids, ps * 2)
+        if len(ids) == 0:
+            return None
+
+        candidates = []
+        for y0, x0 in ids:
+            x0 = int(np.clip(round(x0), 0, self.base_w - 1))
+            y0 = int(np.clip(round(y0), 0, self.base_h - 1))
+            candidates.append((x0, y0))
+
+        Lx = 2 * self.base_w / max(self.base_w, self.base_h)
+        Ly = 2 * self.base_h / max(self.base_w, self.base_h)
+        beta_x = -Lx / 2 + Lx * sx / (self.base_w - 1)
+        beta_y = -Ly / 2 + Ly * sy / (self.base_h - 1)
+        tau_map = 0.5 * ((self.xx_grid - beta_x) ** 2 + (self.yy_grid - beta_y) ** 2) - self.potential_map
+
+        tau_values = np.array([tau_map[y0, x0] for x0, y0 in candidates], dtype=np.float64)
+        mu_values = np.array([abs(self.magnification_map[y0, x0]) for x0, y0 in candidates], dtype=np.float64)
+        mu_values = np.clip(mu_values, 0, self.time_delay_mu_cap)
+
+        if len(tau_values) == 0:
+            return None
+
+        raw_rel_delays = tau_values - np.min(tau_values)
+        raw_max_delay = float(np.max(raw_rel_delays)) if len(raw_rel_delays) > 0 else 0.0
+
+        # Display-only stretch: small dimensionless delays would otherwise be
+        # visually indistinguishable. Preserve all delay ratios and leave
+        # already-large delays unchanged.
+        if raw_max_delay > 0:
+            delay_stretch = max(1.0, self.time_delay_visual_min_max_delay / raw_max_delay)
+        else:
+            delay_stretch = 1.0
+        rel_delays = raw_rel_delays * delay_stretch
+        max_delay = float(np.max(rel_delays)) if len(rel_delays) > 0 else 0.0
+        loop_duration = max(2.0, 3.0 * max_delay)
+
+        self.time_delay_solution_cache = {
+            "positions": candidates,
+            "delays": rel_delays,
+            "raw_delays": raw_rel_delays,
+            "delay_stretch": delay_stretch,
+            "magnifications": mu_values,
+            "loop_duration": loop_duration,
+        }
+        return self.time_delay_solution_cache
+
+    def draw_time_delay_markers(self, img, x_offset=0):
+
+        data = self._get_time_delay_solution_data()
+        if data is None:
+            return
+
+        mu_values = data["magnifications"]
+        if len(mu_values) == 0:
+            return
+
+        mu_ref = max(float(np.max(mu_values)), 1e-8)
+        base_levels = self.time_delay_peak * (
+            np.log1p(self.time_delay_log_strength * mu_values) /
+            np.log1p(self.time_delay_log_strength * mu_ref)
+        )
+
+        t_now = time.time() - self.time_delay_start
+        radius = 5
+
+        for (x0, y0), delay, base_level in zip(data["positions"], data["delays"], base_levels):
+            phase = np.mod(t_now - delay, data["loop_duration"])
+            level = int(np.clip(base_level * self._time_delay_flare(phase, data["loop_duration"]), 0, 255))
+            color = (level, level, level)
+            cv2.circle(img, (int(x0 + x_offset), int(y0)), radius, color, -1)
+            cv2.circle(img, (int(x0 + x_offset), int(y0)), radius, (0, 0, 0), 1)
+
+    def draw_time_delay_source_marker(self, img, x_offset=0):
+
+        # The source flare exists independently of whether the approximate
+        # image-position solver finds one or more conjugate images.
+        if not self.time_delay_mode or self.heart:
+            return
+
+        src_center = self._get_source_center_px()
+        if src_center is None:
+            return
+
+        data = self._get_time_delay_solution_data()
+        loop_duration = 2.0 if data is None else data["loop_duration"]
+
+        sx, sy = src_center
+        x_draw = int(np.clip(round(sx + x_offset), 0, img.shape[1] - 1))
+        y_draw = int(np.clip(round(sy), 0, img.shape[0] - 1))
+
+        t_now = time.time() - self.time_delay_start
+        phase = np.mod(t_now, loop_duration)
+        level = int(np.clip(
+            self.time_delay_peak * self._time_delay_flare(phase, loop_duration),
+            0,
+            255,
+        ))
+
+        radius = 5
+        color = (level, level, level)
+
+        # Two high-contrast outlines keep the source location visible on both
+        # dark and bright desktop backgrounds while the fill carries the flare.
+        cv2.circle(img, (x_draw, y_draw), radius + 2, (255, 255, 255), 2)
+        cv2.circle(img, (x_draw, y_draw), radius + 1, (0, 0, 0), 1)
+        cv2.circle(img, (x_draw, y_draw), radius, color, -1)
+
+    def _soft_plot_color(self, color, brighten=0.30, desaturate=0.22):
+
+        color = np.asarray(color, dtype=np.float64)
+        grey = np.mean(color)
+        mixed = (1.0 - desaturate) * color + desaturate * grey
+        softened = mixed + brighten * (255.0 - mixed)
+        return tuple(int(np.clip(v, 0, 255)) for v in softened)
+
+    def _draw_brightness_plot(self, img, traces, colors, title, current_phase, loop_duration, labels=None, line_widths=None):
+
+        if not self.time_delay_mode or len(traces) == 0:
+            return
+
+        h, w = img.shape[:2]
+        plot_w = int(np.clip(w * 0.60, 190, max(190, w - 20)))
+        plot_h = int(np.clip(h * 0.20, 70, max(70, h - 20)))
+        x0 = max(5, w - plot_w - 10)
+        y0 = 10
+        x1 = min(w - 5, x0 + plot_w)
+        y1 = min(h - 5, y0 + plot_h)
+
+        if x1 - x0 < 80 or y1 - y0 < 55:
+            return
+
+        roi = img[y0:y1, x0:x1].copy()
+        panel = np.full_like(roi, self.time_delay_inset_bg, dtype=np.uint8)
+        blended = cv2.addWeighted(panel, self.time_delay_inset_alpha, roi, 1.0 - self.time_delay_inset_alpha, 0.0)
+        img[y0:y1, x0:x1] = blended
+        cv2.rectangle(img, (x0, y0), (x1, y1), self.time_delay_inset_border, 2)
+
+        title_scale = max(0.30, min(0.44, w / 1300.0))
+        cv2.putText(img, title, (x0 + 8, y0 + 15), cv2.FONT_HERSHEY_SIMPLEX,
+                    title_scale, self.time_delay_inset_text, 1, cv2.LINE_AA)
+
+        left = x0 + 8
+        right = x1 - 7
+        top = y0 + 22
+        bottom = y1 - 10
+        if bottom <= top or right <= left:
+            return
+
+        cv2.line(img, (left, bottom), (right, bottom), self.time_delay_inset_axis, 1, cv2.LINE_AA)
+        cv2.line(img, (left, top), (left, bottom), self.time_delay_inset_axis, 1, cv2.LINE_AA)
+        y_mid = int(round(0.5 * (top + bottom)))
+        cv2.line(img, (left, y_mid), (right, y_mid), (72, 72, 78), 1, cv2.LINE_AA)
+
+        n_samples = len(traces[0])
+        if n_samples < 2:
+            return
+        x_coords = np.linspace(left, right, n_samples).astype(np.int32)
+
+        if line_widths is None:
+            line_widths = [1] * len(traces)
+
+        for trace, color, width_line in zip(traces, colors, line_widths):
+            trace = np.asarray(trace, dtype=np.float64)
+            trace = np.clip(trace, 0.0, 1.0)
+            draw_color = tuple(int(v) for v in color)
+            y_coords = (bottom - trace * (bottom - top)).astype(np.int32)
+            points = np.column_stack((x_coords, y_coords)).reshape((-1, 1, 2))
+            cv2.polylines(img, [points], False, draw_color, int(width_line), cv2.LINE_AA)
+
+        phase_fraction = 0.0 if loop_duration <= 0 else float(np.mod(current_phase, loop_duration) / loop_duration)
+        current_index = int(np.clip(round(phase_fraction * (n_samples - 1)), 0, n_samples - 1))
+        x_current = int(x_coords[current_index])
+        cv2.line(img, (x_current, top), (x_current, bottom), (170, 170, 176), 1, cv2.LINE_AA)
+
+        for trace, color in zip(traces, colors):
+            y_current = int(round(bottom - np.clip(trace[current_index], 0.0, 1.0) * (bottom - top)))
+            cv2.circle(img, (x_current, y_current), 3, (20, 20, 24), -1, cv2.LINE_AA)
+            cv2.circle(img, (x_current, y_current), 2, tuple(int(v) for v in color), -1, cv2.LINE_AA)
+
+
+    def draw_source_brightness_plot(self, img):
+
+        if not self.time_delay_mode or self.heart or self._get_source_center_px() is None:
+            return
+
+        data = self._get_time_delay_solution_data()
+        loop_duration = 2.0 if data is None else data["loop_duration"]
+        sample_times = np.linspace(0.0, loop_duration, self.time_delay_trace_samples, endpoint=False)
+        source_trace = np.array([self._time_delay_flare(t, loop_duration) for t in sample_times], dtype=np.float64)
+        source_trace = np.clip(source_trace, 0.0, 1.0)
+        current_phase = np.mod(time.time() - self.time_delay_start, loop_duration)
+
+        self._draw_brightness_plot(
+            img,
+            [source_trace],
+            [self.time_delay_inset_main_curve],
+            "Source brightness",
+            current_phase,
+            loop_duration,
+            labels=None,
+            line_widths=[2],
+        )
+
+    def draw_image_brightness_plot(self, img):
+
+        data = self._get_time_delay_solution_data()
+        if data is None or len(data["magnifications"]) == 0:
+            return
+
+        loop_duration = data["loop_duration"]
+        sample_times = np.linspace(0.0, loop_duration, self.time_delay_trace_samples, endpoint=False)
+        palette = [
+            self._soft_plot_color((255, 90, 90)),
+            self._soft_plot_color((90, 255, 120)),
+            self._soft_plot_color((90, 165, 255)),
+            self._soft_plot_color((255, 190, 70)),
+            self._soft_plot_color((225, 90, 255)),
+            self._soft_plot_color((90, 255, 245)),
+        ]
+
+        image_traces = []
+        colors = []
+        labels = []
+        for i, (delay, magnification) in enumerate(zip(data["delays"], data["magnifications"])):
+            trace = magnification * np.array([
+                self._time_delay_flare(np.mod(t - delay, loop_duration), loop_duration)
+                for t in sample_times
+            ], dtype=np.float64)
+            image_traces.append(trace)
+            colors.append(palette[i % len(palette)])
+            labels.append(f"I{i + 1}")
+
+        summed_trace = np.sum(image_traces, axis=0)
+        display_scale = max(float(np.max(summed_trace)), 1e-12)
+        normalized_images = [np.clip(trace / display_scale, 0.0, 1.0) for trace in image_traces]
+        normalized_sum = np.clip(summed_trace / display_scale, 0.0, 1.0)
+
+        traces = normalized_images + [normalized_sum]
+        colors = colors + [self.time_delay_inset_main_curve]
+        labels = labels + ["Sum"]
+        widths = [1] * len(normalized_images) + [2]
+        current_phase = np.mod(time.time() - self.time_delay_start, loop_duration)
+
+        self._draw_brightness_plot(
+            img,
+            traces,
+            colors,
+            "Delayed images + sum",
+            current_phase,
+            loop_duration,
+            labels=None,
+            line_widths=widths,
+        )
         
     def HideGUI(self):
 
@@ -556,13 +897,14 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def update_lensed_map(self):
 
+        self.time_delay_solution_cache = None
         pars_sub = None
         if self.substructure:
             if len(self.ellipses_image_plane) > 0:
                 pars_sub = (self.ellipses_image_plane[0][0], self.ellipses_image_plane[0][1])
         else:
             pars_sub = None
-        self.map_x, self.map_y, self.deflxv, self.deflyv, _, _, self.kappa = create_SIE_map(
+        self.map_x, self.map_y, self.deflxv, self.deflyv, self.xx_grid, self.yy_grid, self.kappa, self.potential_map = create_SIE_map(
             self.base_w, self.base_h,
             b=self.b_value / np.sqrt(self.q_value),
             q=self.q_value,
@@ -590,13 +932,14 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.x_idx = np.clip(x_idx, 0, len(x_bins) - 2)
         self.y_idx = np.clip(y_idx, 0, len(y_bins) - 2)
 
-        # Save contours for critical curves
-        dx = 2.0 / (self.base_w - 1) 
-        dy = 2.0 / (self.base_h - 1)
-        d_deflx_dx, d_deflx_dy = np.gradient(self.map_x, axis=1) / dx, np.gradient(self.map_x, axis=0) / dy
-        d_defly_dx, d_defly_dy = np.gradient(self.map_y, axis=1) / dx, np.gradient(self.map_y, axis=0) / dy
-        det = d_deflx_dx * d_defly_dy - d_deflx_dy * d_defly_dx
-        crit_mask = (np.sign(det) < 0)
+        # Save contours for critical curves and a local magnification map.
+        d_bx_dx = np.gradient(self.map_x, axis=1)
+        d_bx_dy = np.gradient(self.map_x, axis=0)
+        d_by_dx = np.gradient(self.map_y, axis=1)
+        d_by_dy = np.gradient(self.map_y, axis=0)
+        self.detA = d_bx_dx * d_by_dy - d_bx_dy * d_by_dx
+        self.magnification_map = 1.0 / np.maximum(np.abs(self.detA), 1e-6)
+        crit_mask = (np.sign(self.detA) < 0)
         self.contours, _ = cv2.findContours(crit_mask.astype(np.uint8) , cv2.RETR_LIST,cv2.CHAIN_APPROX_NONE )
 
         # Save critical curves that go along
@@ -742,6 +1085,8 @@ class LensDesktop(QtWidgets.QMainWindow):
     # Forward Updates
 
     def show_ps(self, img_bgr):
+        if self.time_delay_mode:
+            return
         if len(self.ellipses_image_plane) > 0 or len(self.ellipses_source_plane) > 0:
 
             if len(self.ellipses_image_plane) > 0:
@@ -800,6 +1145,9 @@ class LensDesktop(QtWidgets.QMainWindow):
         if self.critical_checkbox.isChecked():
             self.get_critical(SIE_map_rgb)
 
+        self.draw_time_delay_markers(SIE_map_rgb)
+        self.draw_image_brightness_plot(SIE_map_rgb)
+
         result_image = QtGui.QImage(SIE_map_rgb.data, self.base_w, self.base_h,
                               self.base_w * 3, QtGui.QImage.Format_RGB888)
         result_pixmap = QtGui.QPixmap.fromImage(result_image)
@@ -842,6 +1190,11 @@ class LensDesktop(QtWidgets.QMainWindow):
             contours = self.get_critical(SIE_map_rgb)
             self.get_caustics(img_unlensed, contours)
 
+        self.draw_time_delay_source_marker(img_unlensed)
+        self.draw_source_brightness_plot(img_unlensed)
+        self.draw_time_delay_markers(SIE_map_rgb)
+        self.draw_image_brightness_plot(SIE_map_rgb)
+
         # Combine views.
         combined = np.hstack((img_unlensed, SIE_map_rgb))
         result_image = QtGui.QImage(combined.data, 2 * self.base_w, self.base_h,
@@ -851,6 +1204,8 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     # Inverse Updates
     def inverse_ps_show(self, img_bgr):
+        if self.time_delay_mode:
+            return
         if len(self.ellipses_image_plane) > 0 or len(self.ellipses_source_plane) > 0:
 
             if len(self.ellipses_source_plane) > 0:
@@ -925,6 +1280,9 @@ class LensDesktop(QtWidgets.QMainWindow):
             contours = self.get_critical(img_bgr)
             self.get_caustics(inv_img, contours)
 
+        self.draw_time_delay_source_marker(inv_img)
+        self.draw_source_brightness_plot(inv_img)
+
         result_image = QtGui.QImage(inv_img.data, self.base_w, self.base_h,
                               self.base_w * 3, QtGui.QImage.Format_RGB888)
         result_pixmap = QtGui.QPixmap.fromImage(result_image)
@@ -960,6 +1318,11 @@ class LensDesktop(QtWidgets.QMainWindow):
         if self.critical_checkbox.isChecked():
             contours = self.get_critical(img_bgr)
             self.get_caustics(inv_img, contours)
+
+        self.draw_time_delay_markers(img_bgr)
+        self.draw_image_brightness_plot(img_bgr)
+        self.draw_time_delay_source_marker(inv_img)
+        self.draw_source_brightness_plot(inv_img)
 
         # Combine views.
         combined = np.hstack((img_bgr, inv_img))
